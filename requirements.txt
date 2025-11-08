@@ -1,0 +1,16 @@
+# Reddit Bot (Were-Bot & HWWBot)
+praw>=7.7.0
+
+# Google Sheets Integration (for nickname mapping)
+gspread>=5.10.0
+google-auth>=2.22.0
+google-auth-oauthlib>=1.0.0
+google-auth-httplib2>=0.1.0
+
+# Discord Bot (for monitoring/management)
+discord.py>=2.3.0
+requests>=2.28.0
+
+# Web Dashboard (optional - for log viewing)
+flask>=2.3.0
+gunicorn>=21.2.0

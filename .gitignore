@@ -1,0 +1,37 @@
+# Credentials - NEVER COMMIT THESE
+creds*.json
+*.pem
+.env
+secrets.txt
+
+# Runtime data
+*.log
+comments_replied_to.txt
+unsubscribed_users.txt
+snoozed_threads.json
+vote_declarations.json
+werebot_checkpoint.json
+hwwbot_checkpoint.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
