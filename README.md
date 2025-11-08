@@ -4,7 +4,7 @@ Reddit and Discord bots for the r/HiddenWerewolves gaming community.
 
 ## Bots Included
 
-### 🐺 Were-Bot
+### Werebot
 Reddit bot for tagging users in game threads with advanced features.
 
 **Features:**
