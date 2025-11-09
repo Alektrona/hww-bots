@@ -77,11 +77,11 @@ def bot_login():
     try:
         logger.info("Attempting to log in to Reddit as Werebot...")
         reddit = praw.Reddit(
-            client_id="8iNuk6dEkdo17Q",
-            client_secret="DxAq3hMExicE7wO_-csquPGYanE",
-            username="Were-Bot",
-            password="EngrossedSuspect21",
-            user_agent="Were-Bot:2.0 - Tagging system for HiddenWerewolves (by /u/Penultima)"
+            client_id=client_id,
+            client_secret=client_secret,
+            username=username,
+            password=password,
+            user_agent=user_agent
         )
         
         # Verify authentication

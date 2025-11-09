@@ -24,7 +24,7 @@ ALERT_CHANNEL_ID = int(os.environ.get('ALERT_CHANNEL_ID', '0'))
 PORTAINER_URL = os.environ.get('PORTAINER_URL', 'https://oracle.hufflepuff.fun:9443')
 PORTAINER_API_KEY = os.environ.get('PORTAINER_API_KEY', '')
 WEREBOT_CONTAINER_NAME = os.environ.get('WEREBOT_CONTAINER_NAME', 'werebot')
-MOD_ROLE_NAME = os.environ.get('MOD_ROLE_NAME', 'Moderator')
+MOD_ROLE_NAME = os.environ.get('MOD_ROLE_NAME', 'PermaMods')
 
 # Werebot log file path (mounted volume)
 WEREBOT_LOG_FILE = os.environ.get('WEREBOT_LOG_FILE', '/shared/werebot/data/werebot.log')

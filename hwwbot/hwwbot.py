@@ -48,11 +48,11 @@ def bot_login():
     try:
         logger.info("Attempting to log in to Reddit...")
         reddit = praw.Reddit(
-            client_id="eDn-z1FX_U4P7Q",
-            client_secret="2eFqcAKGpdWSR8ecOmeD0rDCiN0",
-            username="HWWBot",
-            password="yrEtx&l_g0/4ldf(sh",
-            user_agent="HWWBot:3.0 (by /u/Penultima)"
+            client_id=client_id,
+            client_secret=client_secret,
+            username=username,
+            password=password,
+            user_agent=user_agent
         )
         
         # Verify authentication

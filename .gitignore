@@ -1,7 +1,7 @@
 # Credentials - NEVER COMMIT THESE
 creds*.json
 *.pem
-.env
+.env*
 secrets.txt
 
 # Runtime data
