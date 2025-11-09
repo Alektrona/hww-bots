@@ -37,7 +37,7 @@ COMMENTS_FILE = 'comments_replied_to.txt'
 UNSUBSCRIBED_FILE = 'unsubscribed_users.txt'
 SNOOZED_FILE = 'snoozed_threads.json'
 VOTES_FILE = 'vote_declarations.json'
-SUBREDDITS = 'hiddenwerewolves+hiddenwerewolvesa+hiddenwerewolvesb+badgerstudygroup'
+SUBREDDITS = 'hiddenwerewolves+hiddenwerewolvesa+hiddenwerewolvesb+badgerstudygroup+hiddenghosts'
 COMMENT_LIMIT = 50
 MAX_USERS_PER_COMMENT = 3
 
