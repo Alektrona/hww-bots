@@ -73,9 +73,13 @@ def init_google_sheets():
             'https://www.googleapis.com/auth/drive'
         ]
         
-        # Use the credentials file from project
-        creds_path = '/mnt/project/creds2.json' if os.path.exists('/mnt/project/creds2.json') else 'creds2.json'
-        creds = Credentials.from_service_account_file(creds_path, scopes=scope)
+        # Use the credentials file - try multiple locations for compatibility
+        creds_file = os.environ.get('GOOGLE_CREDENTIALS', 'clientsecret2.json')
+        if not os.path.exists(creds_file) and os.path.exists('creds2.json'):
+            creds_file = 'creds2.json'
+        
+        logger.info(f"Using credentials file: {creds_file}")
+        creds = Credentials.from_service_account_file(creds_file, scopes=scope)
         client = gspread.authorize(creds)
         logger.info("Successfully connected to Google Sheets")
         return client
