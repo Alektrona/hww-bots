@@ -43,10 +43,23 @@ def save_checkpoint(data):
 def bot_login():
     """
     Initialize Reddit connection with proper OAuth2 authentication.
-    Uses password flow for script-type application.
+    Uses environment variables for credentials.
     """
+    # Get credentials from environment variables
+    client_id = os.environ.get('REDDIT_CLIENT_ID')
+    client_secret = os.environ.get('REDDIT_CLIENT_SECRET')
+    username = os.environ.get('REDDIT_USERNAME')
+    password = os.environ.get('REDDIT_PASSWORD')
+    user_agent = os.environ.get('REDDIT_USER_AGENT', 'HWWBot:3.0 (by /u/HWWBot)')
+    
+    # Validate required credentials
+    if not all([client_id, client_secret, username, password]):
+        logger.error("Missing required Reddit credentials in environment variables")
+        logger.error("Required: REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET, REDDIT_USERNAME, REDDIT_PASSWORD")
+        raise ValueError("Missing Reddit credentials")
+    
     try:
-        logger.info("Attempting to log in to Reddit...")
+        logger.info(f"Attempting to log in to Reddit as {username}...")
         reddit = praw.Reddit(
             client_id=client_id,
             client_secret=client_secret,
@@ -131,16 +144,19 @@ def run_bot(reddit, client, checkpoint):
         status1 = sheet_one.cell(2, 1).value
         status2 = sheet_one.cell(2, 2).value
         status3 = sheet_one.cell(2, 3).value
+        status4 = sheet_one.cell(2, 4).value  # HiddenGhosts status
         list1 = sheet_one.cell(1, 1).value
         list2 = sheet_one.cell(1, 2).value
         list3 = sheet_one.cell(1, 3).value
-        new_users = sheet_one.cell(1, 4).value
+        list4 = sheet_one.cell(1, 4).value  # HiddenGhosts player list
+        new_users = sheet_one.cell(1, 5).value  # Moved to column 5
         
         # Subreddit names
         subreddits = [
             ("HiddenWerewolves", status1, list1),
             ("HiddenWerewolvesA", status2, list2),
-            ("HiddenWerewolvesB", status3, list3)
+            ("HiddenWerewolvesB", status3, list3),
+            ("HiddenGhosts", status4, list4)
         ]
         
         # Common AutoMod components
