@@ -98,7 +98,7 @@ services:
       - PORTAINER_API_KEY=${PORTAINER_API_KEY}
       - WEREBOT_CONTAINER_NAME=werebot
       - HWWBOT_CONTAINER_NAME=hwwbot
-      - MOD_ROLE_NAME=${MOD_ROLE_NAME:-Moderator}
+      - MOD_ROLE_NAME=${MOD_ROLE_NAME:-PermaMods}
       - WEREBOT_LOG_FILE=/shared/werebot/data/werebot.log
     
     working_dir: /app
