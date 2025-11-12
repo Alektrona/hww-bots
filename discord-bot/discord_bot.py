@@ -147,8 +147,17 @@ portainer = PortainerAPI(PORTAINER_URL, PORTAINER_API_KEY)
 
 @bot.event
 async def on_ready():
+    global last_log_position
+    
     print(f'{bot.user} has connected to Discord!')
     print(f'Monitoring Werebot logs at: {WEREBOT_LOG_FILE}')
+    
+    # Seek to end of log file so we don't repost old logs
+    if os.path.exists(WEREBOT_LOG_FILE):
+        with open(WEREBOT_LOG_FILE, 'r') as f:
+            f.seek(0, 2)  # Seek to end
+            last_log_position = f.tell()
+        print(f'Starting log monitoring from position: {last_log_position}')
     
     # Start background tasks
     check_logs.start()
@@ -159,7 +168,7 @@ async def on_ready():
         if channel:
             embed = discord.Embed(
                 title="Discord Bot Online",
-                description="Werebot monitoring active",
+                description="Werebot monitoring active (monitoring new logs only)",
                 color=discord.Color.green(),
                 timestamp=datetime.utcnow()
             )
