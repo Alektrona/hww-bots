@@ -46,11 +46,11 @@ def bot_login():
     Uses environment variables for credentials.
     """
     # Get credentials from environment variables
-    client_id = os.environ.get('REDDIT_CLIENT_ID')
-    client_secret = os.environ.get('REDDIT_CLIENT_SECRET')
-    username = os.environ.get('REDDIT_USERNAME')
-    password = os.environ.get('REDDIT_PASSWORD')
-    user_agent = os.environ.get('REDDIT_USER_AGENT', 'HWWBot:3.0 (by /u/HWWBot)')
+    client_id = os.environ.get('HWWBOT_CLIENT_ID')
+    client_secret = os.environ.get('HWWBOT_CLIENT_SECRET')
+    username = os.environ.get('HWWBOT_USERNAME')
+    password = os.environ.get('HWWBOT_PASSWORD')
+    user_agent = os.environ.get('HWWBOT_USER_AGENT', 'HWWBot:3.0 (by /u/HWWBot)')
     
     # Validate required credentials
     if not all([client_id, client_secret, username, password]):

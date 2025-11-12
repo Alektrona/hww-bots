@@ -20,14 +20,14 @@ services:
       # Runtime data (persistent)
       - werebot-data:/data
     
-    environment:
-      - REDDIT_CLIENT_ID=${WEREBOT_CLIENT_ID}
-      - REDDIT_CLIENT_SECRET=${WEREBOT_CLIENT_SECRET}
-      - REDDIT_USERNAME=${WEREBOT_USERNAME}
-      - REDDIT_PASSWORD=${WEREBOT_PASSWORD}
-      - REDDIT_USER_AGENT=${WEREBOT_USER_AGENT}
-      - NICKNAME_SPREADSHEET_URL=${NICKNAME_SPREADSHEET_URL:-}
-      - NICKNAME_CREDENTIALS=/app/creds2.json
+  environment:
+    - WEREBOT_CLIENT_ID=${WEREBOT_CLIENT_ID}
+    - WEREBOT_CLIENT_SECRET=${WEREBOT_CLIENT_SECRET}
+    - WEREBOT_USERNAME=${WEREBOT_USERNAME}
+    - WEREBOT_PASSWORD=${WEREBOT_PASSWORD}
+    - WEREBOT_USER_AGENT=${WEREBOT_USER_AGENT}
+    - NICKNAME_SPREADSHEET_URL=${NICKNAME_SPREADSHEET_URL:-}
+    - NICKNAME_CREDENTIALS=/app/creds.json
     
     working_dir: /data
     
@@ -45,7 +45,7 @@ services:
     
     command: >
       /bin/bash -c "
-        pip install --break-system-packages praw &&
+        pip install --break-system-packages praw gspread google-auth &&
         cd /data &&
         python -u /app/hwwbot.py
       "
@@ -54,12 +54,12 @@ services:
       - ./hwwbot:/app:ro
       - hwwbot-data:/data
     
-    environment:
-      - REDDIT_CLIENT_ID=${HWWBOT_CLIENT_ID}
-      - REDDIT_CLIENT_SECRET=${HWWBOT_CLIENT_SECRET}
-      - REDDIT_USERNAME=${HWWBOT_USERNAME}
-      - REDDIT_PASSWORD=${HWWBOT_PASSWORD}
-      - REDDIT_USER_AGENT=${HWWBOT_USER_AGENT}
+  environment:
+    - HWWBOT_CLIENT_ID=${HWWBOT_CLIENT_ID}
+    - HWWBOT_CLIENT_SECRET=${HWWBOT_CLIENT_SECRET}
+    - HWWBOT_USERNAME=${HWWBOT_USERNAME}
+    - HWWBOT_PASSWORD=${HWWBOT_PASSWORD}
+    - HWWBOT_USER_AGENT=${HWWBOT_USER_AGENT}
     
     working_dir: /data
     
