@@ -27,7 +27,7 @@ services:
       - WEREBOT_PASSWORD=${WEREBOT_PASSWORD}
       - WEREBOT_USER_AGENT=${WEREBOT_USER_AGENT}
       - NICKNAME_SPREADSHEET_URL=${NICKNAME_SPREADSHEET_URL:-}
-      - NICKNAME_CREDENTIALS=/app/creds.json
+      - NICKNAME_CREDENTIALS=/app/creds2.json
     
     working_dir: /data
     
