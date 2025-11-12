@@ -60,6 +60,7 @@ services:
       - HWWBOT_USERNAME=${HWWBOT_USERNAME}
       - HWWBOT_PASSWORD=${HWWBOT_PASSWORD}
       - HWWBOT_USER_AGENT=${HWWBOT_USER_AGENT}
+      - GOOGLE_CREDENTIALS=/app/clientsecret2.json
     
     working_dir: /data
     
