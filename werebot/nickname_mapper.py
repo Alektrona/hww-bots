@@ -43,8 +43,8 @@ class NicknameMapper:
             logger.info("Initializing Google Sheets client for nickname lookup...")
             
             scopes = [
-                'https://www.googleapis.com/auth/spreadsheets.readonly',
-                'https://www.googleapis.com/auth/drive.readonly'
+                'https://spreadsheets.google.com/feeds',
+                'https://www.googleapis.com/auth/drive'
             ]
             
             creds = Credentials.from_service_account_file(
