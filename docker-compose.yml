@@ -54,12 +54,12 @@ services:
       - ./hwwbot:/app:ro
       - hwwbot-data:/data
     
-  environment:
-    - HWWBOT_CLIENT_ID=${HWWBOT_CLIENT_ID}
-    - HWWBOT_CLIENT_SECRET=${HWWBOT_CLIENT_SECRET}
-    - HWWBOT_USERNAME=${HWWBOT_USERNAME}
-    - HWWBOT_PASSWORD=${HWWBOT_PASSWORD}
-    - HWWBOT_USER_AGENT=${HWWBOT_USER_AGENT}
+    environment:
+      - HWWBOT_CLIENT_ID=${HWWBOT_CLIENT_ID}
+      - HWWBOT_CLIENT_SECRET=${HWWBOT_CLIENT_SECRET}
+      - HWWBOT_USERNAME=${HWWBOT_USERNAME}
+      - HWWBOT_PASSWORD=${HWWBOT_PASSWORD}
+      - HWWBOT_USER_AGENT=${HWWBOT_USER_AGENT}
     
     working_dir: /data
     
