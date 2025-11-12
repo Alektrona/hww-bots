@@ -12,7 +12,6 @@ import discord
 from discord.ext import commands, tasks
 import os
 import asyncio
-import aiohttp
 from datetime import datetime
 import json
 
@@ -21,8 +20,6 @@ DISCORD_TOKEN = os.environ.get('DISCORD_BOT_TOKEN')
 DISCORD_GUILD_ID = int(os.environ.get('DISCORD_GUILD_ID', '0'))
 LOG_CHANNEL_ID = int(os.environ.get('LOG_CHANNEL_ID', '0'))
 ALERT_CHANNEL_ID = int(os.environ.get('ALERT_CHANNEL_ID', '0'))
-PORTAINER_URL = os.environ.get('PORTAINER_URL', 'https://oracle.hufflepuff.fun:9443')
-PORTAINER_API_KEY = os.environ.get('PORTAINER_API_KEY', '')
 WEREBOT_CONTAINER_NAME = os.environ.get('WEREBOT_CONTAINER_NAME', 'werebot')
 MOD_ROLE_NAME = os.environ.get('MOD_ROLE_NAME', 'PermaMods')
 
@@ -52,62 +49,45 @@ def is_mod():
     return commands.check(predicate)
 
 
-class PortainerAPI:
-    """Helper class for Portainer API interactions"""
+class DockerManager:
+    """Helper class for Docker command interactions"""
     
-    def __init__(self, url, api_key):
-        self.url = url.rstrip('/')
-        self.api_key = api_key
-        self.headers = {'X-API-Key': api_key}
+    async def run_command(self, command):
+        """Run a shell command and return output"""
+        proc = await asyncio.create_subprocess_shell(
+            command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await proc.communicate()
+        return proc.returncode, stdout.decode(), stderr.decode()
     
     async def get_container_id(self, container_name):
         """Get container ID by name"""
-        async with aiohttp.ClientSession() as session:
-            # Get endpoint ID (usually 1 for local)
-            endpoint_url = f"{self.url}/api/endpoints"
-            async with session.get(endpoint_url, headers=self.headers, ssl=False) as resp:
-                if resp.status != 200:
-                    return None
-                endpoints = await resp.json()
-                endpoint_id = endpoints[0]['Id'] if endpoints else 1
-            
-            # Get containers
-            containers_url = f"{self.url}/api/endpoints/{endpoint_id}/docker/containers/json?all=1"
-            async with session.get(containers_url, headers=self.headers, ssl=False) as resp:
-                if resp.status != 200:
-                    return None
-                containers = await resp.json()
-                
-                # Find container by name
-                for container in containers:
-                    names = container.get('Names', [])
-                    if any(container_name in name for name in names):
-                        return container['Id']
-                
-                return None
+        returncode, stdout, stderr = await self.run_command(
+            f"docker ps -a --filter name={container_name} --format '{{{{.ID}}}}'"
+        )
+        
+        if returncode != 0 or not stdout.strip():
+            return None
+        
+        # Return first matching container ID
+        return stdout.strip().split('\n')[0]
     
     async def restart_container(self, container_name):
         """Restart a container by name"""
+        # First check if container exists
         container_id = await self.get_container_id(container_name)
         if not container_id:
             return False, "Container not found"
         
-        async with aiohttp.ClientSession() as session:
-            # Get endpoint ID
-            endpoint_url = f"{self.url}/api/endpoints"
-            async with session.get(endpoint_url, headers=self.headers, ssl=False) as resp:
-                if resp.status != 200:
-                    return False, "Failed to get endpoint"
-                endpoints = await resp.json()
-                endpoint_id = endpoints[0]['Id'] if endpoints else 1
-            
-            # Restart container
-            restart_url = f"{self.url}/api/endpoints/{endpoint_id}/docker/containers/{container_id}/restart"
-            async with session.post(restart_url, headers=self.headers, ssl=False) as resp:
-                if resp.status in (200, 204):
-                    return True, "Container restarted successfully"
-                else:
-                    return False, f"Restart failed: {resp.status}"
+        # Restart the container
+        returncode, stdout, stderr = await self.run_command(f"docker restart {container_name}")
+        
+        if returncode == 0:
+            return True, "Container restarted successfully"
+        else:
+            return False, f"Restart failed: {stderr}"
     
     async def get_container_status(self, container_name):
         """Get container status"""
@@ -115,34 +95,31 @@ class PortainerAPI:
         if not container_id:
             return None, "Container not found"
         
-        async with aiohttp.ClientSession() as session:
-            # Get endpoint ID
-            endpoint_url = f"{self.url}/api/endpoints"
-            async with session.get(endpoint_url, headers=self.headers, ssl=False) as resp:
-                if resp.status != 200:
-                    return None, "Failed to get endpoint"
-                endpoints = await resp.json()
-                endpoint_id = endpoints[0]['Id'] if endpoints else 1
+        # Get container inspect data
+        returncode, stdout, stderr = await self.run_command(
+            f"docker inspect {container_name}"
+        )
+        
+        if returncode != 0:
+            return None, f"Failed to get status: {stderr}"
+        
+        try:
+            import json
+            data = json.loads(stdout)[0]
+            state = data.get('State', {})
             
-            # Get container info
-            inspect_url = f"{self.url}/api/endpoints/{endpoint_id}/docker/containers/{container_id}/json"
-            async with session.get(inspect_url, headers=self.headers, ssl=False) as resp:
-                if resp.status != 200:
-                    return None, f"Failed to get status: {resp.status}"
-                
-                data = await resp.json()
-                state = data.get('State', {})
-                
-                return {
-                    'status': state.get('Status'),
-                    'running': state.get('Running', False),
-                    'started_at': state.get('StartedAt'),
-                    'finished_at': state.get('FinishedAt'),
-                    'exit_code': state.get('ExitCode'),
-                }, None
+            return {
+                'status': state.get('Status'),
+                'running': state.get('Running', False),
+                'started_at': state.get('StartedAt'),
+                'finished_at': state.get('FinishedAt'),
+                'exit_code': state.get('ExitCode'),
+            }, None
+        except (json.JSONDecodeError, IndexError, KeyError) as e:
+            return None, f"Failed to parse status: {e}"
 
 
-portainer = PortainerAPI(PORTAINER_URL, PORTAINER_API_KEY)
+docker_manager = DockerManager()
 
 
 @bot.event
@@ -279,7 +256,7 @@ async def send_log_batch(channel, lines):
 @bot.command(name='status')
 async def bot_status(ctx):
     """Check Werebot status"""
-    status, error = await portainer.get_container_status(WEREBOT_CONTAINER_NAME)
+    status, error = await docker_manager.get_container_status(WEREBOT_CONTAINER_NAME)
     
     if error:
         embed = discord.Embed(
@@ -324,7 +301,7 @@ async def restart_bot(ctx):
     msg = await ctx.send("Restarting Werebot...")
     
     # Restart container
-    success, message = await portainer.restart_container(WEREBOT_CONTAINER_NAME)
+    success, message = await docker_manager.restart_container(WEREBOT_CONTAINER_NAME)
     
     if success:
         embed = discord.Embed(
@@ -446,9 +423,6 @@ def main():
     if not DISCORD_TOKEN:
         print("ERROR: DISCORD_BOT_TOKEN environment variable not set")
         return
-    
-    if not PORTAINER_API_KEY:
-        print("WARNING: PORTAINER_API_KEY not set, restart functionality will not work")
     
     print("Starting Discord bot...")
     bot.run(DISCORD_TOKEN)

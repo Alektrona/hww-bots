@@ -75,31 +75,24 @@ services:
     image: python:3.11-slim
     container_name: hww-discord-bot
     restart: unless-stopped
-    
     command: >
       /bin/bash -c "
-        pip install --break-system-packages discord.py aiohttp &&
+        pip install --break-system-packages discord.py &&
         python -u /app/discord_bot.py
       "
-    
     volumes:
       - ./discord-bot:/app:ro
-      # Read-only access to Were-Bot logs
       - werebot-data:/shared/werebot/data:ro
-      # Could add hwwbot logs too if needed
-      # - hwwbot-data:/shared/hwwbot/data:ro
-    
+      - /var/run/docker.sock:/var/run/docker.sock  # Add this line
     environment:
       - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
       - DISCORD_GUILD_ID=${DISCORD_GUILD_ID}
       - LOG_CHANNEL_ID=${LOG_CHANNEL_ID}
       - ALERT_CHANNEL_ID=${ALERT_CHANNEL_ID}
-      - PORTAINER_URL=${PORTAINER_URL}
-      - PORTAINER_API_KEY=${PORTAINER_API_KEY}
-      - WEREBOT_CONTAINER_NAME=werebot
-      - HWWBOT_CONTAINER_NAME=hwwbot
+      - WEREBOT_CONTAINER_NAME=${WEREBOT_CONTAINER_NAME:-werebot}
+      - HWWBOT_CONTAINER_NAME=${HWWBOT_CONTAINER_NAME:-hwwbot}
+      - WEREBOT_LOG_FILE=${WEREBOT_LOG_FILE:-/shared/werebot/data/werebot.log}
       - MOD_ROLE_NAME=${MOD_ROLE_NAME:-PermaMods}
-      - WEREBOT_LOG_FILE=/shared/werebot/data/werebot.log
     
     working_dir: /app
     
