@@ -74,8 +74,20 @@ def bot_login():
     """
     Initialize Reddit connection with proper OAuth2 authentication.
     """
+    # Get credentials from environment variables
+    client_id = os.environ.get('WEREBOT_CLIENT_ID')
+    client_secret = os.environ.get('WEREBOT_CLIENT_SECRET')
+    username = os.environ.get('WEREBOT_USERNAME')
+    password = os.environ.get('WEREBOT_PASSWORD')
+    user_agent = os.environ.get('WEREBOT_USER_AGENT', 'Were-Bot:2.0 - Tagging system for HiddenWerewolves')
+    
+    # Validate required credentials
+    if not all([client_id, client_secret, username, password]):
+        logger.error("Missing required Reddit credentials in environment variables")
+        raise ValueError("Missing Reddit credentials")
+    
     try:
-        logger.info("Attempting to log in to Reddit as Werebot...")
+        logger.info(f"Attempting to log in to Reddit as {username}...")
         reddit = praw.Reddit(
             client_id=client_id,
             client_secret=client_secret,

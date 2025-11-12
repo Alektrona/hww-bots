@@ -385,7 +385,7 @@ async def tail_logs(ctx, lines: int = 20):
         await ctx.send(f"Error reading logs: {e}")
 
 
-@bot.command(name='help')
+@bot.command(name='bothelp')
 async def bot_help(ctx):
     """Show available commands"""
     embed = discord.Embed(

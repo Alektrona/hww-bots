@@ -3,6 +3,7 @@ creds*.json
 *.pem
 .env*
 secrets.txt
+client*.json
 
 # Runtime data
 *.log
