@@ -72,7 +72,7 @@ services:
 
   # Discord Bot: Monitoring and management
   discord-bot:
-    image: docker:dind
+    image: python:3.11-slim
     container_name: hww-discord-bot
     restart: unless-stopped
     volumes:
@@ -81,22 +81,15 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
-      - DISCORD_GUILD_ID=${DISCORD_GUILD_ID:-}
-      - LOG_CHANNEL_ID=${LOG_CHANNEL_ID:-}
-      - ALERT_CHANNEL_ID=${ALERT_CHANNEL_ID:-}
-      - PORTAINER_URL=${PORTAINER_URL:-https://oracle.hufflepuff.fun:9443}
-      - PORTAINER_API_KEY=${PORTAINER_API_KEY:-}
-      - WEREBOT_CONTAINER_NAME=${WEREBOT_CONTAINER_NAME:-werebot}
-      - HWWBOT_CONTAINER_NAME=${HWWBOT_CONTAINER_NAME:-hwwbot}
-      - MOD_ROLE_NAME=${MOD_ROLE_NAME:-PermaMods,AlumniMods}
-      - WEREBOT_LOG_FILE=${WEREBOT_LOG_FILE:-/shared/werebot/data/werebot.log}
+      - GUILD_CONFIGS=${GUILD_CONFIGS}
+      - WEREBOT_CONTAINER_NAME=werebot
+      - MOD_ROLE_NAMES=PermaMods,AlumniMods
+      - WEREBOT_LOG_FILE=/shared/werebot/data/werebot.log
+      - WEREBOT_FEATURES_FILE=/shared/werebot/data/feature_flags.json
     command: >
-      sh -c "apk add --no-cache python3 py3-pip &&
-             pip3 install --break-system-packages discord.py aiohttp &&
-             python3 /app/discord_bot.py"
-    
+      sh -c "pip install --break-system-packages discord.py &&
+             python /app/discord_bot.py"
     working_dir: /app
-    
     logging:
       driver: "json-file"
       options:
@@ -108,3 +101,4 @@ volumes:
     driver: local
   hwwbot-data:
     driver: local
+    
