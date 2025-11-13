@@ -1366,7 +1366,14 @@ def run_bot(reddit, comments_replied_to, unsubscribed_users, checkpoint, snoozed
             if comment.author and comment.author.name == bot_username:
                 continue
             
+            # Skip unsubscribed users (except if they're trying to subscribe)
             comment_body_upper = comment.body.upper()
+            author_upper = str(comment.author).upper()
+            if author_upper in unsubscribed_users:
+                # Allow SUBSCRIBE command through so they can re-subscribe
+                if "WEREBOT!SUBSCRIBE" not in comment_body_upper and "WERE-BOT!SUBSCRIBE" not in comment_body_upper:
+                    logger.debug(f"Skipping comment from unsubscribed user u/{comment.author}")
+                    continue
             
             # CRITICAL: Mark comment as replied IMMEDIATELY to prevent infinite loops
             # This must happen BEFORE any processing that might fail
@@ -1381,7 +1388,7 @@ def run_bot(reddit, comments_replied_to, unsubscribed_users, checkpoint, snoozed
                 handle_k9_emojify(comment)
             
             # Handle WEREBOT VOTE [username]
-            elif ("WEREBOT VOTE" in comment_body_upper or "WERE-BOT VOTE" in comment_body_upper or
+            if ("WEREBOT VOTE" in comment_body_upper or "WERE-BOT VOTE" in comment_body_upper or
                   "WEREBOT! VOTE" in comment_body_upper or "WERE-BOT! VOTE" in comment_body_upper):
                 logger.info(f"Processing vote declaration from u/{comment.author}")
                 
@@ -1390,7 +1397,7 @@ def run_bot(reddit, comments_replied_to, unsubscribed_users, checkpoint, snoozed
                     vote_data = result
             
             # Handle WEREBOT UNVOTE
-            elif ("WEREBOT UNVOTE" in comment_body_upper or "WERE-BOT UNVOTE" in comment_body_upper or
+            if ("WEREBOT UNVOTE" in comment_body_upper or "WERE-BOT UNVOTE" in comment_body_upper or
                   "WEREBOT! UNVOTE" in comment_body_upper or "WERE-BOT! UNVOTE" in comment_body_upper):
                 logger.info(f"Processing vote removal from u/{comment.author}")
                 
@@ -1399,7 +1406,7 @@ def run_bot(reddit, comments_replied_to, unsubscribed_users, checkpoint, snoozed
                     vote_data = result
             
             # Handle WEREBOT TALLY
-            elif ("WEREBOT TALLY" in comment_body_upper or "WERE-BOT TALLY" in comment_body_upper or
+            if ("WEREBOT TALLY" in comment_body_upper or "WERE-BOT TALLY" in comment_body_upper or
                   "WEREBOT! TALLY" in comment_body_upper or "WERE-BOT! TALLY" in comment_body_upper):
                 logger.info(f"Processing vote tally request from u/{comment.author}")
                 
@@ -1408,51 +1415,65 @@ def run_bot(reddit, comments_replied_to, unsubscribed_users, checkpoint, snoozed
                     tally_comments = result
             
             # Handle WEREBOT RANDOM (must check before regular WEREBOT)
-            elif ("WEREBOT RANDOM" in comment_body_upper or "WERE-BOT RANDOM" in comment_body_upper or 
+            if ("WEREBOT RANDOM" in comment_body_upper or "WERE-BOT RANDOM" in comment_body_upper or 
                 "WEREBOT! RANDOM" in comment_body_upper or "WERE-BOT! RANDOM" in comment_body_upper):
                 logger.info(f"Processing random choice from u/{comment.author}")
                 handle_random(comment)
             
             # Handle WEREBOT SNOOZE (must check before regular WEREBOT)
-            elif ("WEREBOT SNOOZE" in comment_body_upper or "WERE-BOT SNOOZE" in comment_body_upper):
+            if ("WEREBOT SNOOZE" in comment_body_upper or "WERE-BOT SNOOZE" in comment_body_upper):
                 logger.info(f"Processing snooze from u/{comment.author} for thread {comment.submission.id}")
                 
                 result = handle_snooze(comment, snoozed_threads)
                 if result is not None:
                     snoozed_threads = result
             
-            # Handle WEREBOT tagging
-            elif ("WEREBOT" in comment_body_upper or "WERE-BOT" in comment_body_upper):
-                # Resolve nicknames if mapper is available
-                if nickname_mapper:
-                    try:
-                        comment_body_resolved = nickname_mapper.resolve_mentions(comment.body)
-                        if comment_body_resolved != comment.body:
-                            logger.info(f"Resolved nicknames in comment {comment.id}")
-                            logger.debug(f"Original: {comment.body[:100]}...")
-                            logger.debug(f"Resolved: {comment_body_resolved[:100]}...")
-                    except Exception as e:
-                        logger.warning(f"Failed to resolve nicknames: {e}")
+            # Handle WEREBOT tagging (check this LAST since it's the most general)
+            if ("WEREBOT" in comment_body_upper or "WERE-BOT" in comment_body_upper):
+                # Skip if this was already handled by a specific command above
+                # Check if any specific command was detected
+                has_specific_command = any([
+                    "K9" in comment_body_upper,
+                    "VOTE" in comment_body_upper,
+                    "UNVOTE" in comment_body_upper,
+                    "TALLY" in comment_body_upper,
+                    "RANDOM" in comment_body_upper,
+                    "SNOOZE" in comment_body_upper,
+                    "SUBSCRIBE" in comment_body_upper,
+                    "UNSUBSCRIBE" in comment_body_upper
+                ])
+                
+                if not has_specific_command:
+                    # Resolve nicknames if mapper is available
+                    if nickname_mapper:
+                        try:
+                            comment_body_resolved = nickname_mapper.resolve_mentions(comment.body)
+                            if comment_body_resolved != comment.body:
+                                logger.info(f"Resolved nicknames in comment {comment.id}")
+                                logger.debug(f"Original: {comment.body[:100]}...")
+                                logger.debug(f"Resolved: {comment_body_resolved[:100]}...")
+                        except Exception as e:
+                            logger.warning(f"Failed to resolve nicknames: {e}")
+                            comment_body_resolved = comment.body
+                    else:
                         comment_body_resolved = comment.body
-                else:
-                    comment_body_resolved = comment.body
-                
-                # Extract usernames (from resolved text if nicknames were used)
-                usernames = extract_usernames(comment_body_resolved)
-                
-                # Filter out unsubscribed users
-                subscribed_usernames = filter_subscribed_users(usernames, unsubscribed_users)
-                
-                # Filter out users who have snoozed this thread
-                submission_id = comment.submission.id
-                active_usernames = filter_snoozed_users(subscribed_usernames, submission_id, snoozed_threads)
-                
-                # Only tag if there are 4 or more users (>3 as per original logic)
-                if len(active_usernames) > 3:
-                    logger.info(f"Processing tag request from u/{comment.author} with {len(active_usernames)} users")
-                    send_tags(comment, active_usernames, checkpoint)
-                else:
-                    logger.debug(f"Skipping tag request with only {len(active_usernames)} active users")
+                    
+                    # Extract usernames (from resolved text if nicknames were used)
+                    usernames = extract_usernames(comment_body_resolved)
+                    
+                    # Filter out unsubscribed users
+                    subscribed_usernames = filter_subscribed_users(usernames, unsubscribed_users)
+                    
+                    # Filter out users who have snoozed this thread
+                    submission_id = comment.submission.id
+                    active_usernames = filter_snoozed_users(subscribed_usernames, submission_id, snoozed_threads)
+                    
+                    # Only tag if there are 4 or more users (>3 as per original logic)
+                    if len(active_usernames) > 3:
+                        logger.info(f"Processing tag request from u/{comment.author} with {len(active_usernames)} users")
+                        send_tags(comment, active_usernames, checkpoint)
+                    else:
+                        logger.debug(f"Skipping tag request with only {len(active_usernames)} active users")
             
             # Handle unsubscribe
             if "WEREBOT!UNSUBSCRIBE" in comment_body_upper or "WERE-BOT!UNSUBSCRIBE" in comment_body_upper:
@@ -1460,26 +1481,26 @@ def run_bot(reddit, comments_replied_to, unsubscribed_users, checkpoint, snoozed
                 handle_unsubscribe(comment, unsubscribed_users, checkpoint)
             
             # Handle subscribe
-            elif "WEREBOT!SUBSCRIBE" in comment_body_upper or "WERE-BOT!SUBSCRIBE" in comment_body_upper:
+            if "WEREBOT!SUBSCRIBE" in comment_body_upper or "WERE-BOT!SUBSCRIBE" in comment_body_upper:
                 logger.info(f"Processing subscribe from u/{comment.author}")
                 handle_subscribe(comment, unsubscribed_users, checkpoint)
             
             # Handle Frrrrk easter egg (functional - adds to subreddit)
-            elif "I HATE FRRRRK" in comment_body_upper:
+            if "I HATE FRRRRK" in comment_body_upper:
                 logger.info(f"Processing Frrrrk easter egg for u/{comment.author}")
                 handle_easter_egg(comment, reddit)
             
             # Handle text-based easter eggs (just fun personality responses)
-            elif "FUCK WEREBOT" in comment_body_upper or "FUCK WERE-BOT" in comment_body_upper:
+            if "FUCK WEREBOT" in comment_body_upper or "FUCK WERE-BOT" in comment_body_upper:
                 logger.info(f"Processing 'rude' easter egg for u/{comment.author}")
                 handle_text_easter_egg(comment, "fuck werebot", "wow rude 😔")
             
-            elif "THANKS WEREBOT" in comment_body_upper or "THANKS WERE-BOT" in comment_body_upper or \
+            if "THANKS WEREBOT" in comment_body_upper or "THANKS WERE-BOT" in comment_body_upper or \
                  "THANK YOU WEREBOT" in comment_body_upper or "THANK YOU WERE-BOT" in comment_body_upper:
                 logger.info(f"Processing 'thanks' easter egg for u/{comment.author}")
                 handle_text_easter_egg(comment, "thanks", "😊")
             
-            elif "GOOD BOT" in comment_body_upper:
+            if "GOOD BOT" in comment_body_upper:
                 # Only respond if it seems directed at Werebot
                 if "WEREBOT" in comment_body_upper or "WERE-BOT" in comment_body_upper:
                     logger.info(f"Processing 'good bot' easter egg for u/{comment.author}")

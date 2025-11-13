@@ -21,10 +21,13 @@ DISCORD_GUILD_ID = int(os.environ.get('DISCORD_GUILD_ID', '0'))
 LOG_CHANNEL_ID = int(os.environ.get('LOG_CHANNEL_ID', '0'))
 ALERT_CHANNEL_ID = int(os.environ.get('ALERT_CHANNEL_ID', '0'))
 WEREBOT_CONTAINER_NAME = os.environ.get('WEREBOT_CONTAINER_NAME', 'werebot')
-MOD_ROLE_NAME = os.environ.get('MOD_ROLE_NAME', 'PermaMods')
+MOD_ROLE_NAMES = os.environ.get('MOD_ROLE_NAMES', 'PermaMods,AlumniMods').split(',')  # Multiple mod roles
 
 # Werebot log file path (mounted volume)
 WEREBOT_LOG_FILE = os.environ.get('WEREBOT_LOG_FILE', '/shared/werebot/data/werebot.log')
+
+# Werebot feature flags file (shared volume)
+WEREBOT_FEATURES_FILE = os.environ.get('WEREBOT_FEATURES_FILE', '/shared/werebot/data/feature_flags.json')
 
 # Bot setup
 intents = discord.Intents.default()
@@ -40,12 +43,16 @@ last_error_time = None
 
 
 def is_mod():
-    """Check if user has mod role"""
+    """Check if user has any mod role (PermaMods or AlumniMods)"""
     async def predicate(ctx):
         if not ctx.guild:
             return False
-        role = discord.utils.get(ctx.guild.roles, name=MOD_ROLE_NAME)
-        return role in ctx.author.roles
+        # Check if user has any of the mod roles
+        for role_name in MOD_ROLE_NAMES:
+            role = discord.utils.get(ctx.guild.roles, name=role_name.strip())
+            if role and role in ctx.author.roles:
+                return True
+        return False
     return commands.check(predicate)
 
 
@@ -89,6 +96,36 @@ class DockerManager:
         else:
             return False, f"Restart failed: {stderr}"
     
+    async def stop_container(self, container_name):
+        """Stop a container by name"""
+        # First check if container exists
+        container_id = await self.get_container_id(container_name)
+        if not container_id:
+            return False, "Container not found"
+        
+        # Stop the container
+        returncode, stdout, stderr = await self.run_command(f"docker stop {container_name}")
+        
+        if returncode == 0:
+            return True, "Container stopped successfully"
+        else:
+            return False, f"Stop failed: {stderr}"
+    
+    async def start_container(self, container_name):
+        """Start a container by name"""
+        # First check if container exists
+        container_id = await self.get_container_id(container_name)
+        if not container_id:
+            return False, "Container not found"
+        
+        # Start the container
+        returncode, stdout, stderr = await self.run_command(f"docker start {container_name}")
+        
+        if returncode == 0:
+            return True, "Container started successfully"
+        else:
+            return False, f"Start failed: {stderr}"
+    
     async def get_container_status(self, container_name):
         """Get container status"""
         container_id = await self.get_container_id(container_name)
@@ -120,6 +157,67 @@ class DockerManager:
 
 
 docker_manager = DockerManager()
+
+
+class FeatureManager:
+    """Helper class for managing Werebot feature flags"""
+    
+    DEFAULT_FEATURES = {
+        'vote_system': True,
+        'random': True,
+        'k9_mode': True,
+        'easter_eggs': True,
+        'tagging': True
+    }
+    
+    FEATURE_DESCRIPTIONS = {
+        'vote_system': 'Vote tracking (VOTE, UNVOTE, TALLY commands)',
+        'random': 'Random picker (RANDOM command)',
+        'k9_mode': 'K9 emoji mode (K9 command)',
+        'easter_eggs': 'Fun easter egg responses',
+        'tagging': 'User tagging system (main WEREBOT functionality)'
+    }
+    
+    def get_features(self):
+        """Load feature flags from file"""
+        if not os.path.exists(WEREBOT_FEATURES_FILE):
+            return self.DEFAULT_FEATURES.copy()
+        
+        try:
+            with open(WEREBOT_FEATURES_FILE, 'r') as f:
+                features = json.load(f)
+                # Merge with defaults to ensure all features exist
+                return {**self.DEFAULT_FEATURES, **features}
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"Error loading features: {e}")
+            return self.DEFAULT_FEATURES.copy()
+    
+    def save_features(self, features):
+        """Save feature flags to file"""
+        try:
+            with open(WEREBOT_FEATURES_FILE, 'w') as f:
+                json.dump(features, f, indent=2)
+            return True
+        except IOError as e:
+            print(f"Error saving features: {e}")
+            return False
+    
+    def toggle_feature(self, feature_name, enabled):
+        """Enable or disable a feature"""
+        if feature_name not in self.DEFAULT_FEATURES:
+            return False, f"Unknown feature: {feature_name}"
+        
+        features = self.get_features()
+        features[feature_name] = enabled
+        
+        if self.save_features(features):
+            state = "enabled" if enabled else "disabled"
+            return True, f"Feature '{feature_name}' {state}"
+        else:
+            return False, "Failed to save feature flags"
+
+
+feature_manager = FeatureManager()
 
 
 @bot.event
@@ -298,14 +396,14 @@ async def bot_status(ctx):
 async def restart_bot(ctx):
     """Restart Werebot (Mods only)"""
     # Send initial message
-    msg = await ctx.send("Restarting Werebot...")
+    msg = await ctx.send("🔄 Restarting Werebot...")
     
     # Restart container
     success, message = await docker_manager.restart_container(WEREBOT_CONTAINER_NAME)
     
     if success:
         embed = discord.Embed(
-            title="Restart Successful",
+            title="✅ Restart Successful",
             description=message,
             color=discord.Color.green(),
             timestamp=datetime.utcnow()
@@ -313,7 +411,7 @@ async def restart_bot(ctx):
         embed.set_footer(text=f"Restarted by {ctx.author.display_name}")
     else:
         embed = discord.Embed(
-            title="Restart Failed",
+            title="❌ Restart Failed",
             description=message,
             color=discord.Color.red(),
             timestamp=datetime.utcnow()
@@ -326,9 +424,91 @@ async def restart_bot(ctx):
         log_channel = bot.get_channel(LOG_CHANNEL_ID)
         if log_channel:
             log_embed = discord.Embed(
-                title="Bot Restart Triggered",
+                title="🔄 Bot Restart Triggered",
                 description=f"Werebot restarted by {ctx.author.mention}",
                 color=discord.Color.blue(),
+                timestamp=datetime.utcnow()
+            )
+            await log_channel.send(embed=log_embed)
+
+
+@bot.command(name='stop')
+@is_mod()
+async def stop_bot(ctx):
+    """Stop Werebot (Emergency kill switch - Mods only)"""
+    # Send initial message
+    msg = await ctx.send("🛑 Stopping Werebot...")
+    
+    # Stop container
+    success, message = await docker_manager.stop_container(WEREBOT_CONTAINER_NAME)
+    
+    if success:
+        embed = discord.Embed(
+            title="🛑 Bot Stopped",
+            description=f"{message}\n\n⚠️ Use `!werebot start` to restart the bot.",
+            color=discord.Color.orange(),
+            timestamp=datetime.utcnow()
+        )
+        embed.set_footer(text=f"Stopped by {ctx.author.display_name}")
+    else:
+        embed = discord.Embed(
+            title="❌ Stop Failed",
+            description=message,
+            color=discord.Color.red(),
+            timestamp=datetime.utcnow()
+        )
+    
+    await msg.edit(content=None, embed=embed)
+    
+    # Log to channel
+    if success and LOG_CHANNEL_ID:
+        log_channel = bot.get_channel(LOG_CHANNEL_ID)
+        if log_channel:
+            log_embed = discord.Embed(
+                title="🛑 Bot Stopped",
+                description=f"⚠️ Werebot stopped by {ctx.author.mention}",
+                color=discord.Color.red(),
+                timestamp=datetime.utcnow()
+            )
+            await log_channel.send(embed=log_embed)
+
+
+@bot.command(name='start')
+@is_mod()
+async def start_bot(ctx):
+    """Start Werebot (Mods only)"""
+    # Send initial message
+    msg = await ctx.send("▶️ Starting Werebot...")
+    
+    # Start container
+    success, message = await docker_manager.start_container(WEREBOT_CONTAINER_NAME)
+    
+    if success:
+        embed = discord.Embed(
+            title="✅ Bot Started",
+            description=message,
+            color=discord.Color.green(),
+            timestamp=datetime.utcnow()
+        )
+        embed.set_footer(text=f"Started by {ctx.author.display_name}")
+    else:
+        embed = discord.Embed(
+            title="❌ Start Failed",
+            description=message,
+            color=discord.Color.red(),
+            timestamp=datetime.utcnow()
+        )
+    
+    await msg.edit(content=None, embed=embed)
+    
+    # Log to channel
+    if success and LOG_CHANNEL_ID:
+        log_channel = bot.get_channel(LOG_CHANNEL_ID)
+        if log_channel:
+            log_embed = discord.Embed(
+                title="▶️ Bot Started",
+                description=f"Werebot started by {ctx.author.mention}",
+                color=discord.Color.green(),
                 timestamp=datetime.utcnow()
             )
             await log_channel.send(embed=log_embed)
@@ -371,11 +551,108 @@ async def tail_logs(ctx, lines: int = 20):
         await ctx.send(f"Error reading logs: {e}")
 
 
+@bot.command(name='features')
+async def list_features(ctx):
+    """Show current feature status"""
+    features = feature_manager.get_features()
+    
+    embed = discord.Embed(
+        title="🎛️ Werebot Features",
+        description="Current feature toggle states",
+        color=discord.Color.blue(),
+        timestamp=datetime.utcnow()
+    )
+    
+    for feature, enabled in sorted(features.items()):
+        status = "✅ Enabled" if enabled else "❌ Disabled"
+        description = feature_manager.FEATURE_DESCRIPTIONS.get(feature, "No description")
+        embed.add_field(
+            name=f"{status} - {feature}",
+            value=description,
+            inline=False
+        )
+    
+    embed.set_footer(text="Use !werebot enable/disable <feature> to toggle")
+    await ctx.send(embed=embed)
+
+
+@bot.command(name='enable')
+@is_mod()
+async def enable_feature(ctx, feature: str):
+    """Enable a Werebot feature (Mods only)"""
+    success, message = feature_manager.toggle_feature(feature, True)
+    
+    if success:
+        embed = discord.Embed(
+            title="✅ Feature Enabled",
+            description=message,
+            color=discord.Color.green(),
+            timestamp=datetime.utcnow()
+        )
+        embed.set_footer(text=f"Enabled by {ctx.author.display_name}")
+    else:
+        embed = discord.Embed(
+            title="❌ Error",
+            description=message,
+            color=discord.Color.red()
+        )
+    
+    await ctx.send(embed=embed)
+    
+    # Log to channel
+    if success and LOG_CHANNEL_ID:
+        log_channel = bot.get_channel(LOG_CHANNEL_ID)
+        if log_channel:
+            log_embed = discord.Embed(
+                title="Feature Toggled",
+                description=f"{ctx.author.mention} enabled '{feature}'",
+                color=discord.Color.blue(),
+                timestamp=datetime.utcnow()
+            )
+            await log_channel.send(embed=log_embed)
+
+
+@bot.command(name='disable')
+@is_mod()
+async def disable_feature(ctx, feature: str):
+    """Disable a Werebot feature (Mods only)"""
+    success, message = feature_manager.toggle_feature(feature, False)
+    
+    if success:
+        embed = discord.Embed(
+            title="❌ Feature Disabled",
+            description=message,
+            color=discord.Color.orange(),
+            timestamp=datetime.utcnow()
+        )
+        embed.set_footer(text=f"Disabled by {ctx.author.display_name}")
+    else:
+        embed = discord.Embed(
+            title="❌ Error",
+            description=message,
+            color=discord.Color.red()
+        )
+    
+    await ctx.send(embed=embed)
+    
+    # Log to channel
+    if success and LOG_CHANNEL_ID:
+        log_channel = bot.get_channel(LOG_CHANNEL_ID)
+        if log_channel:
+            log_embed = discord.Embed(
+                title="Feature Toggled",
+                description=f"{ctx.author.mention} disabled '{feature}'",
+                color=discord.Color.blue(),
+                timestamp=datetime.utcnow()
+            )
+            await log_channel.send(embed=log_embed)
+
+
 @bot.command(name='bothelp')
 async def bot_help(ctx):
     """Show available commands"""
     embed = discord.Embed(
-        title="Werebot Manager Commands",
+        title="🤖 Werebot Manager Commands",
         description="Available commands for managing Werebot",
         color=discord.Color.blue()
     )
@@ -387,8 +664,20 @@ async def bot_help(ctx):
     )
     
     embed.add_field(
+        name="!werebot stop",
+        value="🛑 Stop Werebot (Emergency kill switch - Mods only)",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="!werebot start",
+        value="▶️ Start Werebot (Mods only)",
+        inline=False
+    )
+    
+    embed.add_field(
         name="!werebot restart",
-        value="Restart Werebot (Mods only)",
+        value="🔄 Restart Werebot (Mods only)",
         inline=False
     )
     
@@ -399,7 +688,25 @@ async def bot_help(ctx):
     )
     
     embed.add_field(
-        name="!werebot help",
+        name="!werebot features",
+        value="Show all features and their current status",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="!werebot enable <feature>",
+        value="Enable a Werebot feature (Mods only)",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="!werebot disable <feature>",
+        value="Disable a Werebot feature (Mods only)",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="!werebot bothelp",
         value="Show this help message",
         inline=False
     )
@@ -410,11 +717,15 @@ async def bot_help(ctx):
 
 
 @restart_bot.error
+@stop_bot.error
+@start_bot.error
 @tail_logs.error
+@enable_feature.error
+@disable_feature.error
 async def mod_command_error(ctx, error):
     """Handle errors for mod-only commands"""
     if isinstance(error, commands.CheckFailure):
-        await ctx.send("This command requires the Moderator role")
+        await ctx.send("❌ This command requires the PermaMods or AlumniMods role")
     else:
         await ctx.send(f"An error occurred: {error}")
 
