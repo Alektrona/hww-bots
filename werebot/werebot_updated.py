@@ -643,7 +643,7 @@ def handle_vote_declaration(comment, vote_data, nickname_mapper=None):
         
         # Reject invalid targets (like "and", "but", etc.)
         if not is_valid:
-            message = f"⚠️ Invalid vote target: **{target}**\n\n"
+            message = f"Invalid vote target: **{target}**\n\n"
             message += "Please vote for either:\n"
             message += "- A Reddit username with /u/ (e.g., `WEREBOT VOTE /u/username`)\n"
             if nickname_mapper:
@@ -680,9 +680,7 @@ def handle_vote_tally(comment, vote_data):
     """
     Handle WEREBOT TALLY command to show vote summary.
     
-    Shows:
-    - Top 3 candidates by vote count
-    - Full breakdown of who's voting for whom with clickable links
+    Shows vote breakdown in a clean table format with proper tie handling.
     
     Args:
         comment: The comment requesting tally
@@ -706,19 +704,7 @@ def handle_vote_tally(comment, vote_data):
         # Build response
         message = "## Vote Tally\n\n"
         
-        # Top 3 candidates
-        if top_3:
-            message += "**Top Candidates:**\n\n"
-            for i, (name_upper, count, display_name) in enumerate(top_3, 1):
-                emoji = ["🥇", "🥈", "🥉"][i-1] if i <= 3 else "▪️"
-                plural = "vote" if count == 1 else "votes"
-                message += f"{emoji} **{display_name}** - {count} {plural}\n"
-            message += "\n"
-        
-        # Full breakdown
-        message += "**All Votes:**\n\n"
-        
-        # Group by target
+        # Group by target to build full vote breakdown
         votes_by_target = {}
         for voter, vote_info in all_votes.items():
             # Handle both old format (string) and new format (dict)
@@ -741,18 +727,25 @@ def handle_vote_tally(comment, vote_data):
                 'permalink': permalink
             })
         
-        # Sort by vote count
+        # Sort by vote count (descending), then alphabetically by name for ties
         sorted_targets = sorted(
             votes_by_target.items(),
-            key=lambda x: len(x[1]['voters']),
-            reverse=True
+            key=lambda x: (-len(x[1]['voters']), x[1]['display_name'].lower())
         )
+        
+        # Create table
+        message += "Candidate | Votes | Voted By\n"
+        message += "---|:---:|---\n"
         
         for target_upper, data in sorted_targets:
             # Build voter list with links
             voter_links = []
             for voter_info in data['voters']:
-                voter_name = voter_info['name'].title()  # Fix ALL CAPS
+                voter_name = voter_info['name']
+                # Remove /u/ prefix if present and format properly
+                if voter_name.startswith('/u/'):
+                    voter_name = voter_name[3:]
+                
                 if voter_info['permalink']:
                     # Create clickable link to vote comment
                     voter_link = f"[{voter_name}](https://reddit.com{voter_info['permalink']})"
@@ -763,10 +756,10 @@ def handle_vote_tally(comment, vote_data):
             
             voters_list = ", ".join(voter_links)
             count = len(data['voters'])
-            plural = "vote" if count == 1 else "votes"
-            message += f"• **{data['display_name']}** ({count} {plural}): {voters_list}\n"
+            
+            message += f"**{data['display_name']}** | {count} | {voters_list}\n"
         
-        message += f"\n*Total: {len(all_votes)} declared votes*"
+        message += f"\n*Total: {len(all_votes)} declared vote{'s' if len(all_votes) != 1 else ''}*"
         
         comment.reply(message)
         logger.info(f"Vote tally requested in thread {submission_id}: {len(all_votes)} votes")
