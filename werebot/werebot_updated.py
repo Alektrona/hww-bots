@@ -241,15 +241,16 @@ def save_vote_declarations(vote_data):
     except Exception as e:
         logger.error(f"Failed to save vote declarations: {e}")
 
-def declare_vote(submission_id, voter, target, vote_data):
+def declare_vote(submission_id, voter, target, vote_data, permalink=''):
     """
     Declare a vote for a specific thread.
     
     Args:
         submission_id: Reddit submission ID
-        voter: Username declaring the vote (will be uppercased)
-        target: Username being voted for (preserved as-is)
+        voter: Username declaring the vote
+        target: Username being voted for
         vote_data: Current vote declarations dict
+        permalink: Comment permalink for the vote
     
     Returns:
         Updated vote_data dict
@@ -259,7 +260,11 @@ def declare_vote(submission_id, voter, target, vote_data):
     if submission_id not in vote_data:
         vote_data[submission_id] = {}
     
-    vote_data[submission_id][voter_upper] = target
+    # Store as dict with target and permalink
+    vote_data[submission_id][voter_upper] = {
+        'target': target,
+        'permalink': permalink
+    }
     logger.info(f"Vote declared: {voter} → {target} in thread {submission_id}")
     
     return vote_data
@@ -583,7 +588,7 @@ def handle_random(comment):
         logger.error(f"Failed to process RANDOM command: {e}")
         return False
 
-def handle_vote_declaration(comment, vote_data):
+def handle_vote_declaration(comment, vote_data, nickname_mapper=None):
     """
     Handle WEREBOT VOTE [username] command.
     
@@ -595,6 +600,7 @@ def handle_vote_declaration(comment, vote_data):
     Args:
         comment: The comment containing vote declaration
         vote_data: Current vote declarations dict
+        nickname_mapper: Optional NicknameMapper for validating nicknames
     
     Returns:
         Updated vote_data dict, or None if failed
@@ -613,14 +619,42 @@ def handle_vote_declaration(comment, vote_data):
         
         target = match.group(1)
         
+        # Validate target
+        is_valid = False
+        display_target = target
+        
+        # Check if it starts with /u/ in the original comment
+        if '/u/' in comment.body.lower():
+            is_valid = True
+            display_target = target
+        # Check if it's a known nickname
+        elif nickname_mapper and nickname_mapper.is_nickname(target):
+            is_valid = True
+            # Resolve nickname to actual username
+            resolved = nickname_mapper.resolve_nickname(target)
+            if resolved:
+                display_target = resolved
+        
+        # Reject invalid targets (like "and", "but", etc.)
+        if not is_valid:
+            message = f"Invalid vote target: **{target}**\n\n"
+            message += "Please vote for either:\n"
+            message += "- A Reddit username with /u/ (e.g., `WEREBOT VOTE /u/username`)\n"
+            if nickname_mapper:
+                message += "- A registered nickname (e.g., `WEREBOT VOTE Puff`)\n"
+            comment.reply(message)
+            logger.info(f"Rejected invalid vote from u/{voter} for '{target}'")
+            time.sleep(2)
+            return None
+        
         # Declare the vote
-        vote_data = declare_vote(submission_id, voter, target, vote_data)
+        vote_data = declare_vote(submission_id, voter, display_target, vote_data, comment.permalink)
         save_vote_declarations(vote_data)
         
         # Reply to confirm
-        message = f"✓ Vote recorded: /u/{voter} is voting for **{target}**"
+        message = f"✓ Vote recorded: /u/{voter} is voting for **{display_target}**"
         comment.reply(message)
-        logger.info(f"Vote declaration: u/{voter} → {target} in thread {submission_id}")
+        logger.info(f"Vote declaration: u/{voter} → {display_target} in thread {submission_id}")
         time.sleep(2)
         
         return vote_data
@@ -635,7 +669,7 @@ def handle_vote_tally(comment, vote_data):
     
     Shows:
     - Top 3 candidates by vote count
-    - Full breakdown of who's voting for whom
+    - Full breakdown of who's voting for whom with clickable links
     
     Args:
         comment: The comment requesting tally
@@ -673,14 +707,26 @@ def handle_vote_tally(comment, vote_data):
         
         # Group by target
         votes_by_target = {}
-        for voter, target in all_votes.items():
+        for voter, vote_info in all_votes.items():
+            # Handle both old format (string) and new format (dict)
+            if isinstance(vote_info, dict):
+                target = vote_info['target']
+                permalink = vote_info.get('permalink', '')
+            else:
+                # Old format compatibility
+                target = vote_info
+                permalink = ''
+            
             target_upper = target.upper()
             if target_upper not in votes_by_target:
                 votes_by_target[target_upper] = {
                     'display_name': target,
                     'voters': []
                 }
-            votes_by_target[target_upper]['voters'].append(voter)
+            votes_by_target[target_upper]['voters'].append({
+                'name': voter,
+                'permalink': permalink
+            })
         
         # Sort by vote count
         sorted_targets = sorted(
@@ -690,7 +736,19 @@ def handle_vote_tally(comment, vote_data):
         )
         
         for target_upper, data in sorted_targets:
-            voters_list = ", ".join([f"/u/{v}" for v in data['voters']])
+            # Build voter list with links
+            voter_links = []
+            for voter_info in data['voters']:
+                voter_name = voter_info['name'].title()  # Fix ALL CAPS
+                if voter_info['permalink']:
+                    # Create clickable link to vote comment
+                    voter_link = f"[{voter_name}](https://reddit.com{voter_info['permalink']})"
+                else:
+                    # No link for old data
+                    voter_link = f"/u/{voter_name}"
+                voter_links.append(voter_link)
+            
+            voters_list = ", ".join(voter_links)
             count = len(data['voters'])
             plural = "vote" if count == 1 else "votes"
             message += f"• **{data['display_name']}** ({count} {plural}): {voters_list}\n"
@@ -1181,7 +1239,7 @@ def run_bot(reddit, comments_replied_to, unsubscribed_users, checkpoint, snoozed
                   "WEREBOT! VOTE" in comment_body_upper or "WERE-BOT! VOTE" in comment_body_upper):
                 logger.info(f"Processing vote declaration from u/{comment.author}")
                 
-                result = handle_vote_declaration(comment, vote_data)
+                result = handle_vote_declaration(comment, vote_data, nickname_mapper)
                 if result is not None:
                     vote_data = result
                     comments_replied_to.append(comment.id)
