@@ -742,9 +742,15 @@ def handle_vote_tally(comment, vote_data):
             voter_links = []
             for voter_info in data['voters']:
                 voter_name = voter_info['name']
-                # Remove /u/ prefix if present and format properly
+                # Remove /u/ prefix if present
                 if voter_name.startswith('/u/'):
                     voter_name = voter_name[3:]
+                
+                # Fix ALL CAPS names - convert to proper case
+                # Only do this if the entire name is uppercase
+                if voter_name.isupper() and len(voter_name) > 1:
+                    # Keep first letter capital, rest lowercase
+                    voter_name = voter_name[0].upper() + voter_name[1:].lower()
                 
                 if voter_info['permalink']:
                     # Create clickable link to vote comment
