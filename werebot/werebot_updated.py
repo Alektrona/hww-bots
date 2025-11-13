@@ -627,17 +627,16 @@ def handle_vote_declaration(comment, vote_data, nickname_mapper=None):
         if '/u/' in comment.body.lower():
             is_valid = True
             display_target = target
-        # Check if it's a known nickname
-        elif nickname_mapper and nickname_mapper.is_nickname(target):
-            is_valid = True
-            # Resolve nickname to actual username
-            resolved = nickname_mapper.resolve_nickname(target)
+        # Check if it's a known nickname (use get_username method)
+        elif nickname_mapper:
+            resolved = nickname_mapper.get_username(target)
             if resolved:
+                is_valid = True
                 display_target = resolved
         
         # Reject invalid targets (like "and", "but", etc.)
         if not is_valid:
-            message = f"Invalid vote target: **{target}**\n\n"
+            message = f"⚠️ Invalid vote target: **{target}**\n\n"
             message += "Please vote for either:\n"
             message += "- A Reddit username with /u/ (e.g., `WEREBOT VOTE /u/username`)\n"
             if nickname_mapper:
@@ -647,8 +646,15 @@ def handle_vote_declaration(comment, vote_data, nickname_mapper=None):
             time.sleep(2)
             return None
         
-        # Declare the vote
-        vote_data = declare_vote(submission_id, voter, display_target, vote_data, comment.permalink)
+        # Declare the vote - store permalink too
+        voter_upper = voter.upper()
+        if submission_id not in vote_data:
+            vote_data[submission_id] = {}
+        
+        vote_data[submission_id][voter_upper] = {
+            'target': display_target,
+            'permalink': comment.permalink
+        }
         save_vote_declarations(vote_data)
         
         # Reply to confirm
