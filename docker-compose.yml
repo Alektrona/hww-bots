@@ -87,8 +87,9 @@ services:
       - WEREBOT_LOG_FILE=/shared/werebot/data/werebot.log
       - WEREBOT_FEATURES_FILE=/shared/werebot/data/feature_flags.json
     command: >
-      sh -c "pip install --break-system-packages discord.py &&
-             python /app/discord_bot.py"
+      sh -c "apt-get update && apt-get install -y docker.io &&
+         pip install --break-system-packages discord.py &&
+         python /app/discord_bot.py"
     working_dir: /app
     logging:
       driver: "json-file"
