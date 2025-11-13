@@ -287,7 +287,14 @@ def get_vote_summary(submission_id, vote_data):
     
     # Count votes per target
     vote_counts = {}
-    for voter, target in votes.items():
+    for voter, vote_info in votes.items():
+        # Handle both old format (string) and new format (dict)
+        if isinstance(vote_info, dict):
+            target = vote_info['target']
+        else:
+            # Old format compatibility
+            target = vote_info
+        
         target_upper = target.upper()
         if target_upper not in vote_counts:
             vote_counts[target_upper] = {
