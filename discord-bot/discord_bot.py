@@ -1,11 +1,22 @@
 """
-Discord Bot for Monitoring and Managing Were-Bot
+Discord Bot for Monitoring and Managing Were-Bot (Multi-Guild Support)
 
 Features:
-- Posts bot logs to Discord channel
-- Allows mods to restart bot via commands
+- Works across multiple Discord servers simultaneously
+- Posts bot logs to each server's designated channel
+- Allows mods to restart bot via commands from any server
 - Shows bot status
-- Alerts on errors
+- Alerts on errors to each server's alert channel
+- Manages feature toggles
+- All servers control the same Werebot instance
+
+Configuration via environment variables:
+- DISCORD_BOT_TOKEN: Bot token from Discord Developer Portal
+- GUILD_CONFIGS: "guild_id:log_channel_id:alert_channel_id,..." format
+- MOD_ROLE_NAMES: Comma-separated role names (must exist in all servers)
+- WEREBOT_CONTAINER_NAME: Docker container name
+- WEREBOT_LOG_FILE: Path to Werebot log file
+- WEREBOT_FEATURES_FILE: Path to feature flags JSON
 """
 
 import discord
@@ -17,9 +28,25 @@ import json
 
 # Configuration from environment variables
 DISCORD_TOKEN = os.environ.get('DISCORD_BOT_TOKEN')
-DISCORD_GUILD_ID = int(os.environ.get('DISCORD_GUILD_ID', '0'))
-LOG_CHANNEL_ID = int(os.environ.get('LOG_CHANNEL_ID', '0'))
-ALERT_CHANNEL_ID = int(os.environ.get('ALERT_CHANNEL_ID', '0'))
+
+# Multi-guild configuration: Format "guild_id:log_channel_id:alert_channel_id,guild_id:log_channel_id:alert_channel_id"
+# Example: "123456:789012:345678,987654:321098:765432"
+GUILD_CONFIGS_STR = os.environ.get('GUILD_CONFIGS', '')
+GUILD_CONFIGS = {}
+
+# Parse guild configurations
+if GUILD_CONFIGS_STR:
+    for config in GUILD_CONFIGS_STR.split(','):
+        parts = config.strip().split(':')
+        if len(parts) >= 3:
+            guild_id = int(parts[0])
+            log_channel_id = int(parts[1])
+            alert_channel_id = int(parts[2])
+            GUILD_CONFIGS[guild_id] = {
+                'log_channel': log_channel_id,
+                'alert_channel': alert_channel_id
+            }
+
 WEREBOT_CONTAINER_NAME = os.environ.get('WEREBOT_CONTAINER_NAME', 'werebot')
 MOD_ROLE_NAMES = os.environ.get('MOD_ROLE_NAMES', 'PermaMods,AlumniMods').split(',')  # Multiple mod roles
 
@@ -220,6 +247,16 @@ class FeatureManager:
 feature_manager = FeatureManager()
 
 
+async def send_to_all_log_channels(embed):
+    """Send an embed to all configured log channels"""
+    for guild_id, config in GUILD_CONFIGS.items():
+        log_channel_id = config.get('log_channel')
+        if log_channel_id:
+            channel = bot.get_channel(log_channel_id)
+            if channel:
+                await channel.send(embed=embed)
+
+
 @bot.event
 async def on_ready():
     global last_log_position
@@ -237,17 +274,23 @@ async def on_ready():
     # Start background tasks
     check_logs.start()
     
-    # Send startup message
-    if LOG_CHANNEL_ID:
-        channel = bot.get_channel(LOG_CHANNEL_ID)
-        if channel:
-            embed = discord.Embed(
-                title="Discord Bot Online",
-                description="Werebot monitoring active (monitoring new logs only)",
-                color=discord.Color.green(),
-                timestamp=datetime.utcnow()
-            )
-            await channel.send(embed=embed)
+    # Send startup message to all configured guilds
+    for guild_id, config in GUILD_CONFIGS.items():
+        log_channel_id = config.get('log_channel')
+        if log_channel_id:
+            channel = bot.get_channel(log_channel_id)
+            if channel:
+                embed = discord.Embed(
+                    title="Discord Bot Online",
+                    description="Werebot monitoring active (monitoring new logs only)",
+                    color=discord.Color.green(),
+                    timestamp=datetime.utcnow()
+                )
+                await channel.send(embed=embed)
+            else:
+                print(f'Warning: Could not find log channel {log_channel_id} for guild {guild_id}')
+        else:
+            print(f'Warning: No log channel configured for guild {guild_id}')
 
 
 @tasks.loop(seconds=10)
@@ -255,11 +298,7 @@ async def check_logs():
     """Check Were-Bot logs and post new entries to Discord"""
     global last_log_position
     
-    if not LOG_CHANNEL_ID:
-        return
-    
-    channel = bot.get_channel(LOG_CHANNEL_ID)
-    if not channel:
+    if not GUILD_CONFIGS:
         return
     
     try:
@@ -276,7 +315,7 @@ async def check_logs():
         if not new_lines:
             return
         
-        # Group lines and send
+        # Group lines and send to all guilds
         batch = []
         for line in new_lines:
             line = line.strip()
@@ -287,18 +326,30 @@ async def check_logs():
             
             # Send batch if it's getting large
             if len(batch) >= 10:
-                await send_log_batch(channel, batch)
+                await send_log_batch_to_all_guilds(batch)
                 batch = []
         
         # Send remaining
         if batch:
-            await send_log_batch(channel, batch)
+            await send_log_batch_to_all_guilds(batch)
     
     except Exception as e:
         print(f"Error checking logs: {e}")
 
 
-async def send_log_batch(channel, lines):
+async def send_log_batch_to_all_guilds(lines):
+    """Send a batch of log lines to all configured guilds"""
+    for guild_id, config in GUILD_CONFIGS.items():
+        log_channel_id = config.get('log_channel')
+        alert_channel_id = config.get('alert_channel')
+        
+        if log_channel_id:
+            channel = bot.get_channel(log_channel_id)
+            if channel:
+                await send_log_batch(channel, lines, alert_channel_id)
+
+
+async def send_log_batch(channel, lines, alert_channel_id=None):
     """Send a batch of log lines to Discord"""
     global last_error_time
     
@@ -334,8 +385,8 @@ async def send_log_batch(channel, lines):
     await channel.send(embed=embed)
     
     # Send alert for errors
-    if has_error and ALERT_CHANNEL_ID:
-        alert_channel = bot.get_channel(ALERT_CHANNEL_ID)
+    if has_error and alert_channel_id:
+        alert_channel = bot.get_channel(alert_channel_id)
         if alert_channel:
             # Rate limit alerts (don't spam)
             now = datetime.utcnow()
@@ -419,17 +470,15 @@ async def restart_bot(ctx):
     
     await msg.edit(content=None, embed=embed)
     
-    # Log to channel
-    if LOG_CHANNEL_ID:
-        log_channel = bot.get_channel(LOG_CHANNEL_ID)
-        if log_channel:
-            log_embed = discord.Embed(
-                title="🔄 Bot Restart Triggered",
-                description=f"Werebot restarted by {ctx.author.mention}",
-                color=discord.Color.blue(),
-                timestamp=datetime.utcnow()
-            )
-            await log_channel.send(embed=log_embed)
+    # Log to all channels
+    if success:
+        log_embed = discord.Embed(
+            title="🔄 Bot Restart Triggered",
+            description=f"Werebot restarted by {ctx.author.mention}",
+            color=discord.Color.blue(),
+            timestamp=datetime.utcnow()
+        )
+        await send_to_all_log_channels(log_embed)
 
 
 @bot.command(name='stop')
@@ -460,17 +509,15 @@ async def stop_bot(ctx):
     
     await msg.edit(content=None, embed=embed)
     
-    # Log to channel
-    if success and LOG_CHANNEL_ID:
-        log_channel = bot.get_channel(LOG_CHANNEL_ID)
-        if log_channel:
-            log_embed = discord.Embed(
-                title="🛑 Bot Stopped",
-                description=f"⚠️ Werebot stopped by {ctx.author.mention}",
-                color=discord.Color.red(),
-                timestamp=datetime.utcnow()
-            )
-            await log_channel.send(embed=log_embed)
+    # Log to all channels
+    if success:
+        log_embed = discord.Embed(
+            title="🛑 Bot Stopped",
+            description=f"⚠️ Werebot stopped by {ctx.author.mention}",
+            color=discord.Color.red(),
+            timestamp=datetime.utcnow()
+        )
+        await send_to_all_log_channels(log_embed)
 
 
 @bot.command(name='start')
@@ -501,17 +548,15 @@ async def start_bot(ctx):
     
     await msg.edit(content=None, embed=embed)
     
-    # Log to channel
-    if success and LOG_CHANNEL_ID:
-        log_channel = bot.get_channel(LOG_CHANNEL_ID)
-        if log_channel:
-            log_embed = discord.Embed(
-                title="▶️ Bot Started",
-                description=f"Werebot started by {ctx.author.mention}",
-                color=discord.Color.green(),
-                timestamp=datetime.utcnow()
-            )
-            await log_channel.send(embed=log_embed)
+    # Log to all channels
+    if success:
+        log_embed = discord.Embed(
+            title="▶️ Bot Started",
+            description=f"Werebot started by {ctx.author.mention}",
+            color=discord.Color.green(),
+            timestamp=datetime.utcnow()
+        )
+        await send_to_all_log_channels(log_embed)
 
 
 @bot.command(name='tail')
@@ -599,17 +644,15 @@ async def enable_feature(ctx, feature: str):
     
     await ctx.send(embed=embed)
     
-    # Log to channel
-    if success and LOG_CHANNEL_ID:
-        log_channel = bot.get_channel(LOG_CHANNEL_ID)
-        if log_channel:
-            log_embed = discord.Embed(
-                title="Feature Toggled",
-                description=f"{ctx.author.mention} enabled '{feature}'",
-                color=discord.Color.blue(),
-                timestamp=datetime.utcnow()
-            )
-            await log_channel.send(embed=log_embed)
+    # Log to all channels
+    if success:
+        log_embed = discord.Embed(
+            title="Feature Toggled",
+            description=f"{ctx.author.mention} enabled '{feature}'",
+            color=discord.Color.blue(),
+            timestamp=datetime.utcnow()
+        )
+        await send_to_all_log_channels(log_embed)
 
 
 @bot.command(name='disable')
@@ -635,17 +678,15 @@ async def disable_feature(ctx, feature: str):
     
     await ctx.send(embed=embed)
     
-    # Log to channel
-    if success and LOG_CHANNEL_ID:
-        log_channel = bot.get_channel(LOG_CHANNEL_ID)
-        if log_channel:
-            log_embed = discord.Embed(
-                title="Feature Toggled",
-                description=f"{ctx.author.mention} disabled '{feature}'",
-                color=discord.Color.blue(),
-                timestamp=datetime.utcnow()
-            )
-            await log_channel.send(embed=log_embed)
+    # Log to all channels
+    if success:
+        log_embed = discord.Embed(
+            title="Feature Toggled",
+            description=f"{ctx.author.mention} disabled '{feature}'",
+            color=discord.Color.blue(),
+            timestamp=datetime.utcnow()
+        )
+        await send_to_all_log_channels(log_embed)
 
 
 @bot.command(name='bothelp')
@@ -657,33 +698,16 @@ async def bot_help(ctx):
         color=discord.Color.blue()
     )
     
+    # General Commands section
+    embed.add_field(
+        name="📋 General Commands",
+        value="These commands are available to everyone:",
+        inline=False
+    )
+    
     embed.add_field(
         name="!werebot status",
         value="Check if Werebot is running",
-        inline=False
-    )
-    
-    embed.add_field(
-        name="!werebot stop",
-        value="🛑 Stop Werebot (Emergency kill switch - Mods only)",
-        inline=False
-    )
-    
-    embed.add_field(
-        name="!werebot start",
-        value="▶️ Start Werebot (Mods only)",
-        inline=False
-    )
-    
-    embed.add_field(
-        name="!werebot restart",
-        value="🔄 Restart Werebot (Mods only)",
-        inline=False
-    )
-    
-    embed.add_field(
-        name="!werebot tail [lines]",
-        value="Show last N lines of logs (Mods only, default 20, max 50)",
         inline=False
     )
     
@@ -694,20 +718,51 @@ async def bot_help(ctx):
     )
     
     embed.add_field(
+        name="!werebot bothelp",
+        value="Show this help message",
+        inline=False
+    )
+    
+    # Mod-Only Commands section
+    embed.add_field(
+        name="🔒 Mod-Only Commands",
+        value="These commands require PermaMods or AlumniMods role:",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="!werebot restart",
+        value="🔄 Restart Werebot",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="!werebot stop",
+        value="🛑 Stop Werebot (Emergency kill switch)",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="!werebot start",
+        value="▶️ Start Werebot",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="!werebot tail [lines]",
+        value="Show last N lines of logs (default 20, max 50)",
+        inline=False
+    )
+    
+    embed.add_field(
         name="!werebot enable <feature>",
-        value="Enable a Werebot feature (Mods only)",
+        value="Enable a Werebot feature",
         inline=False
     )
     
     embed.add_field(
         name="!werebot disable <feature>",
-        value="Disable a Werebot feature (Mods only)",
-        inline=False
-    )
-    
-    embed.add_field(
-        name="!werebot bothelp",
-        value="Show this help message",
+        value="Disable a Werebot feature",
         inline=False
     )
     
