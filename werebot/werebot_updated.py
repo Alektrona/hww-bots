@@ -37,6 +37,7 @@ COMMENTS_FILE = 'comments_replied_to.txt'
 UNSUBSCRIBED_FILE = 'unsubscribed_users.txt'
 SNOOZED_FILE = 'snoozed_threads.json'
 VOTES_FILE = 'vote_declarations.json'
+TALLY_COMMENTS_FILE = 'tally_comments.json'
 SUBREDDITS = 'hiddenwerewolves+hiddenwerewolvesa+hiddenwerewolvesb+badgerstudygroup+hiddenghosts'
 COMMENT_LIMIT = 50
 MAX_USERS_PER_COMMENT = 3
@@ -241,6 +242,36 @@ def save_vote_declarations(vote_data):
     except Exception as e:
         logger.error(f"Failed to save vote declarations: {e}")
 
+def get_tally_comments():
+    """
+    Load tally comments tracking data.
+    
+    Returns:
+        dict: Maps submission_id -> comment_id of tally comment
+              Example: {"abc123": "xyz789"}
+    """
+    if not os.path.isfile(TALLY_COMMENTS_FILE):
+        logger.info("No tally comments file found, starting fresh")
+        return {}
+    
+    try:
+        with open(TALLY_COMMENTS_FILE, "r") as f:
+            data = json.load(f)
+            logger.info(f"Loaded tally comment data for {len(data)} threads")
+            return data
+    except Exception as e:
+        logger.error(f"Error loading tally comments file: {e}")
+        return {}
+
+def save_tally_comments(tally_data):
+    """Save tally comments tracking data to file"""
+    try:
+        with open(TALLY_COMMENTS_FILE, "w") as f:
+            json.dump(tally_data, f, indent=2)
+        logger.debug("Tally comments saved")
+    except Exception as e:
+        logger.error(f"Failed to save tally comments: {e}")
+
 def declare_vote(submission_id, voter, target, vote_data, permalink=''):
     """
     Declare a vote for a specific thread.
@@ -268,6 +299,32 @@ def declare_vote(submission_id, voter, target, vote_data, permalink=''):
     logger.info(f"Vote declared: {voter} → {target} in thread {submission_id}")
     
     return vote_data
+
+def remove_vote(submission_id, voter, vote_data):
+    """
+    Remove a vote declaration for a specific thread.
+    
+    Args:
+        submission_id: Reddit submission ID
+        voter: Username removing their vote
+        vote_data: Current vote declarations dict
+    
+    Returns:
+        tuple: (Updated vote_data dict, was_vote_removed)
+    """
+    voter_upper = voter.upper()
+    
+    if submission_id not in vote_data:
+        return vote_data, False
+    
+    if voter_upper not in vote_data[submission_id]:
+        return vote_data, False
+    
+    # Remove the vote
+    del vote_data[submission_id][voter_upper]
+    logger.info(f"Vote removed: {voter} in thread {submission_id}")
+    
+    return vote_data, True
 
 def get_vote_summary(submission_id, vote_data):
     """
@@ -643,14 +700,8 @@ def handle_vote_declaration(comment, vote_data, nickname_mapper=None):
         
         # Reject invalid targets (like "and", "but", etc.)
         if not is_valid:
-            message = f"Invalid vote target: **{target}**\n\n"
-            message += "Please vote for either:\n"
-            message += "- A Reddit username with /u/ (e.g., `WEREBOT VOTE /u/username`)\n"
-            if nickname_mapper:
-                message += "- A registered nickname (e.g., `WEREBOT VOTE Puff`)\n"
-            comment.reply(message)
-            logger.info(f"Rejected invalid vote from u/{voter} for '{target}'")
-            time.sleep(2)
+            # Log but DON'T reply to avoid spamming user repeatedly
+            logger.info(f"Rejected invalid vote from u/{voter} for '{target}' - not replying to avoid spam")
             return None
         
         # Declare the vote - store permalink too
@@ -676,18 +727,55 @@ def handle_vote_declaration(comment, vote_data, nickname_mapper=None):
         logger.error(f"Failed to process VOTE declaration: {e}")
         return None
 
-def handle_vote_tally(comment, vote_data):
+def handle_vote_removal(comment, vote_data):
+    """
+    Handle WEREBOT UNVOTE command to remove a vote.
+    
+    Args:
+        comment: The comment containing "WEREBOT UNVOTE"
+        vote_data: Current vote declarations dict
+    
+    Returns:
+        Updated vote_data dict, or None if failed
+    """
+    try:
+        voter = str(comment.author)
+        submission_id = comment.submission.id
+        
+        # Remove the vote
+        vote_data, was_removed = remove_vote(submission_id, voter, vote_data)
+        
+        if was_removed:
+            save_vote_declarations(vote_data)
+            message = f"✓ Vote removed: /u/{voter} is no longer voting"
+            logger.info(f"Vote removed: u/{voter} in thread {submission_id}")
+        else:
+            message = f"/u/{voter}, you don't have an active vote to remove in this thread."
+            logger.info(f"No vote to remove for u/{voter} in thread {submission_id}")
+        
+        comment.reply(message)
+        time.sleep(2)
+        return vote_data
+        
+    except Exception as e:
+        logger.error(f"Failed to process UNVOTE command: {e}")
+        return None
+
+def handle_vote_tally(comment, vote_data, tally_comments, reddit):
     """
     Handle WEREBOT TALLY command to show vote summary.
     
-    Shows vote breakdown in a clean table format with proper tie handling.
+    Creates ONE tally comment per thread and edits it on subsequent requests.
+    Replies with a link to the tally comment.
     
     Args:
         comment: The comment requesting tally
         vote_data: Current vote declarations dict
+        tally_comments: Dict mapping submission_id -> tally_comment_id
+        reddit: Reddit instance for fetching comments
     
     Returns:
-        True if successful, False otherwise
+        Updated tally_comments dict, or None if failed
     """
     try:
         submission_id = comment.submission.id
@@ -695,14 +783,39 @@ def handle_vote_tally(comment, vote_data):
         top_3, all_votes = get_vote_summary(submission_id, vote_data)
         
         if not all_votes:
-            message = "No votes have been declared in this thread yet.\n\n"
+            # No votes yet, but still create a tally comment for future updates
+            message = "## Vote Tally\n\n"
+            message += "*No votes have been declared in this thread yet.*\n\n"
             message += "Use `WEREBOT VOTE username` to declare your vote!"
-            comment.reply(message)
+            
+            # Check if we already have a tally comment for this thread
+            if submission_id in tally_comments:
+                tally_comment_id = tally_comments[submission_id]
+                try:
+                    # Edit existing empty tally
+                    tally_comment = reddit.comment(tally_comment_id)
+                    tally_comment.edit(message)
+                    logger.info(f"Updated empty tally comment {tally_comment_id} in thread {submission_id}")
+                    
+                    reply_message = f"[View vote tally →](https://reddit.com{tally_comment.permalink})"
+                    comment.reply(reply_message)
+                    time.sleep(2)
+                    return tally_comments
+                except Exception as e:
+                    logger.warning(f"Could not edit existing tally comment {tally_comment_id}: {e}")
+                    # Fall through to create new comment
+            
+            # Create new tally comment (even with no votes)
+            tally_comment = comment.reply(message)
+            tally_comments[submission_id] = tally_comment.id
+            save_tally_comments(tally_comments)
+            
+            logger.info(f"Created empty tally comment {tally_comment.id} in thread {submission_id} (no votes yet)")
             time.sleep(2)
-            return True
+            return tally_comments
         
-        # Build response
-        message = "## Vote Tally\n\n"
+        # Build tally message
+        tally_message = "## Vote Tally\n\n"
         
         # Group by target to build full vote breakdown
         votes_by_target = {}
@@ -734,8 +847,8 @@ def handle_vote_tally(comment, vote_data):
         )
         
         # Create table
-        message += "Candidate | Votes | Voted By\n"
-        message += "---|:---:|---\n"
+        tally_message += "Candidate | Votes | Voted By\n"
+        tally_message += "---|:---:|---\n"
         
         for target_upper, data in sorted_targets:
             # Build voter list with links
@@ -747,34 +860,53 @@ def handle_vote_tally(comment, vote_data):
                     voter_name = voter_name[3:]
                 
                 # Fix ALL CAPS names - convert to proper case
-                # Only do this if the entire name is uppercase
                 if voter_name.isupper() and len(voter_name) > 1:
-                    # Keep first letter capital, rest lowercase
                     voter_name = voter_name[0].upper() + voter_name[1:].lower()
                 
                 if voter_info['permalink']:
-                    # Create clickable link to vote comment
                     voter_link = f"[{voter_name}](https://reddit.com{voter_info['permalink']})"
                 else:
-                    # No link for old data
                     voter_link = f"/u/{voter_name}"
                 voter_links.append(voter_link)
             
             voters_list = ", ".join(voter_links)
             count = len(data['voters'])
             
-            message += f"**{data['display_name']}** | {count} | {voters_list}\n"
+            tally_message += f"**{data['display_name']}** | {count} | {voters_list}\n"
         
-        message += f"\n*Total: {len(all_votes)} declared vote{'s' if len(all_votes) != 1 else ''}*"
+        tally_message += f"\n*Total: {len(all_votes)} declared vote{'s' if len(all_votes) != 1 else ''}*"
         
-        comment.reply(message)
-        logger.info(f"Vote tally requested in thread {submission_id}: {len(all_votes)} votes")
+        # Check if we already have a tally comment for this thread
+        if submission_id in tally_comments:
+            tally_comment_id = tally_comments[submission_id]
+            try:
+                # Try to fetch and edit existing comment
+                tally_comment = reddit.comment(tally_comment_id)
+                tally_comment.edit(tally_message)
+                logger.info(f"Updated existing tally comment {tally_comment_id} in thread {submission_id}")
+                
+                # Reply with link to tally
+                reply_message = f"[View updated vote tally →](https://reddit.com{tally_comment.permalink})"
+                comment.reply(reply_message)
+                time.sleep(2)
+                return tally_comments
+                
+            except Exception as e:
+                logger.warning(f"Could not edit existing tally comment {tally_comment_id}: {e}")
+                # Fall through to create new comment
+        
+        # Create new tally comment
+        tally_comment = comment.reply(tally_message)
+        tally_comments[submission_id] = tally_comment.id
+        save_tally_comments(tally_comments)
+        
+        logger.info(f"Created new tally comment {tally_comment.id} in thread {submission_id}: {len(all_votes)} votes")
         time.sleep(2)
-        return True
+        return tally_comments
         
     except Exception as e:
         logger.error(f"Failed to process TALLY command: {e}")
-        return False
+        return None
 
 # K9 Emoji Dictionary
 K9_EMOJI_MAP = {
@@ -1208,7 +1340,7 @@ def handle_text_easter_egg(comment, trigger, response):
         logger.error(f"Failed to post easter egg response: {e}")
         return False
 
-def run_bot(reddit, comments_replied_to, unsubscribed_users, checkpoint, snoozed_threads, vote_data, nickname_mapper=None):
+def run_bot(reddit, comments_replied_to, unsubscribed_users, checkpoint, snoozed_threads, vote_data, tally_comments, nickname_mapper=None):
     """
     Main bot logic - monitors comments and handles various commands
     
@@ -1236,15 +1368,17 @@ def run_bot(reddit, comments_replied_to, unsubscribed_users, checkpoint, snoozed
             
             comment_body_upper = comment.body.upper()
             
+            # CRITICAL: Mark comment as replied IMMEDIATELY to prevent infinite loops
+            # This must happen BEFORE any processing that might fail
+            comments_replied_to.append(comment.id)
+            save_comment_id(comment.id)
+            processed_count += 1
+            
             # Handle WEREBOT K9 (emojify) - must check before general commands
             if ("WEREBOT K9" in comment_body_upper or "WERE-BOT K9" in comment_body_upper or
                 "WEREBOT! K9" in comment_body_upper or "WERE-BOT! K9" in comment_body_upper):
                 logger.info(f"Processing K9 emojify from u/{comment.author}")
-                
-                if handle_k9_emojify(comment):
-                    comments_replied_to.append(comment.id)
-                    save_comment_id(comment.id)
-                    processed_count += 1
+                handle_k9_emojify(comment)
             
             # Handle WEREBOT VOTE [username]
             elif ("WEREBOT VOTE" in comment_body_upper or "WERE-BOT VOTE" in comment_body_upper or
@@ -1254,29 +1388,30 @@ def run_bot(reddit, comments_replied_to, unsubscribed_users, checkpoint, snoozed
                 result = handle_vote_declaration(comment, vote_data, nickname_mapper)
                 if result is not None:
                     vote_data = result
-                    comments_replied_to.append(comment.id)
-                    save_comment_id(comment.id)
-                    processed_count += 1
+            
+            # Handle WEREBOT UNVOTE
+            elif ("WEREBOT UNVOTE" in comment_body_upper or "WERE-BOT UNVOTE" in comment_body_upper or
+                  "WEREBOT! UNVOTE" in comment_body_upper or "WERE-BOT! UNVOTE" in comment_body_upper):
+                logger.info(f"Processing vote removal from u/{comment.author}")
+                
+                result = handle_vote_removal(comment, vote_data)
+                if result is not None:
+                    vote_data = result
             
             # Handle WEREBOT TALLY
             elif ("WEREBOT TALLY" in comment_body_upper or "WERE-BOT TALLY" in comment_body_upper or
                   "WEREBOT! TALLY" in comment_body_upper or "WERE-BOT! TALLY" in comment_body_upper):
                 logger.info(f"Processing vote tally request from u/{comment.author}")
                 
-                if handle_vote_tally(comment, vote_data):
-                    comments_replied_to.append(comment.id)
-                    save_comment_id(comment.id)
-                    processed_count += 1
+                result = handle_vote_tally(comment, vote_data, tally_comments, reddit)
+                if result is not None:
+                    tally_comments = result
             
             # Handle WEREBOT RANDOM (must check before regular WEREBOT)
             elif ("WEREBOT RANDOM" in comment_body_upper or "WERE-BOT RANDOM" in comment_body_upper or 
                 "WEREBOT! RANDOM" in comment_body_upper or "WERE-BOT! RANDOM" in comment_body_upper):
                 logger.info(f"Processing random choice from u/{comment.author}")
-                
-                if handle_random(comment):
-                    comments_replied_to.append(comment.id)
-                    save_comment_id(comment.id)
-                    processed_count += 1
+                handle_random(comment)
             
             # Handle WEREBOT SNOOZE (must check before regular WEREBOT)
             elif ("WEREBOT SNOOZE" in comment_body_upper or "WERE-BOT SNOOZE" in comment_body_upper):
@@ -1285,9 +1420,6 @@ def run_bot(reddit, comments_replied_to, unsubscribed_users, checkpoint, snoozed
                 result = handle_snooze(comment, snoozed_threads)
                 if result is not None:
                     snoozed_threads = result
-                    comments_replied_to.append(comment.id)
-                    save_comment_id(comment.id)
-                    processed_count += 1
             
             # Handle WEREBOT tagging
             elif ("WEREBOT" in comment_body_upper or "WERE-BOT" in comment_body_upper):
@@ -1318,70 +1450,42 @@ def run_bot(reddit, comments_replied_to, unsubscribed_users, checkpoint, snoozed
                 # Only tag if there are 4 or more users (>3 as per original logic)
                 if len(active_usernames) > 3:
                     logger.info(f"Processing tag request from u/{comment.author} with {len(active_usernames)} users")
-                    
-                    if send_tags(comment, active_usernames, checkpoint):
-                        comments_replied_to.append(comment.id)
-                        save_comment_id(comment.id)
-                        processed_count += 1
-                    else:
-                        logger.warning(f"Failed to send tags for comment {comment.id}")
+                    send_tags(comment, active_usernames, checkpoint)
                 else:
                     logger.debug(f"Skipping tag request with only {len(active_usernames)} active users")
             
             # Handle unsubscribe
             if "WEREBOT!UNSUBSCRIBE" in comment_body_upper or "WERE-BOT!UNSUBSCRIBE" in comment_body_upper:
                 logger.info(f"Processing unsubscribe from u/{comment.author}")
-                
-                if handle_unsubscribe(comment, unsubscribed_users, checkpoint):
-                    comments_replied_to.append(comment.id)
+                handle_unsubscribe(comment, unsubscribed_users, checkpoint)
                     save_comment_id(comment.id)
                     processed_count += 1
             
             # Handle subscribe
             elif "WEREBOT!SUBSCRIBE" in comment_body_upper or "WERE-BOT!SUBSCRIBE" in comment_body_upper:
                 logger.info(f"Processing subscribe from u/{comment.author}")
-                
-                if handle_subscribe(comment, unsubscribed_users, checkpoint):
-                    comments_replied_to.append(comment.id)
-                    save_comment_id(comment.id)
-                    processed_count += 1
+                handle_subscribe(comment, unsubscribed_users, checkpoint)
             
             # Handle Frrrrk easter egg (functional - adds to subreddit)
             elif "I HATE FRRRRK" in comment_body_upper:
                 logger.info(f"Processing Frrrrk easter egg for u/{comment.author}")
-                
-                if handle_easter_egg(comment, reddit):
-                    comments_replied_to.append(comment.id)
-                    save_comment_id(comment.id)
-                    processed_count += 1
+                handle_easter_egg(comment, reddit)
             
             # Handle text-based easter eggs (just fun personality responses)
             elif "FUCK WEREBOT" in comment_body_upper or "FUCK WERE-BOT" in comment_body_upper:
                 logger.info(f"Processing 'rude' easter egg for u/{comment.author}")
-                
-                if handle_text_easter_egg(comment, "fuck werebot", "wow rude 😔"):
-                    comments_replied_to.append(comment.id)
-                    save_comment_id(comment.id)
-                    processed_count += 1
+                handle_text_easter_egg(comment, "fuck werebot", "wow rude 😔")
             
             elif "THANKS WEREBOT" in comment_body_upper or "THANKS WERE-BOT" in comment_body_upper or \
                  "THANK YOU WEREBOT" in comment_body_upper or "THANK YOU WERE-BOT" in comment_body_upper:
                 logger.info(f"Processing 'thanks' easter egg for u/{comment.author}")
-                
-                if handle_text_easter_egg(comment, "thanks", "😊"):
-                    comments_replied_to.append(comment.id)
-                    save_comment_id(comment.id)
-                    processed_count += 1
+                handle_text_easter_egg(comment, "thanks", "😊")
             
             elif "GOOD BOT" in comment_body_upper:
                 # Only respond if it seems directed at Werebot
                 if "WEREBOT" in comment_body_upper or "WERE-BOT" in comment_body_upper:
                     logger.info(f"Processing 'good bot' easter egg for u/{comment.author}")
-                    
-                    if handle_text_easter_egg(comment, "good bot", "😊"):
-                        comments_replied_to.append(comment.id)
-                        save_comment_id(comment.id)
-                        processed_count += 1
+                    handle_text_easter_egg(comment, "good bot", "😊")
         
         if processed_count > 0:
             logger.info(f"Processed {processed_count} new comments this cycle")
@@ -1389,7 +1493,7 @@ def run_bot(reddit, comments_replied_to, unsubscribed_users, checkpoint, snoozed
         else:
             logger.debug("No new comments to process this cycle")
         
-        return checkpoint, snoozed_threads, vote_data
+        return checkpoint, snoozed_threads, vote_data, tally_comments
         
     except Exception as e:
         logger.error(f"Error in run_bot: {e}", exc_info=True)
@@ -1414,6 +1518,7 @@ def main():
         unsubscribed_users = get_unsubscribed_users()
         snoozed_threads = get_snoozed_threads()
         vote_data = get_vote_declarations()
+        tally_comments = get_tally_comments()
         
         # Initialize nickname mapper if configured
         nickname_mapper = None
@@ -1450,6 +1555,7 @@ def main():
     logger.info(f"Currently {len(unsubscribed_users)} unsubscribed users")
     logger.info(f"Currently {len(snoozed_threads)} threads with snoozed users")
     logger.info(f"Currently {len(vote_data)} threads with declared votes")
+    logger.info(f"Currently {len(tally_comments)} threads with tally comments")
     logger.info("Starting main loop...")
     
     consecutive_errors = 0
@@ -1457,7 +1563,7 @@ def main():
     
     while True:
         try:
-            checkpoint, snoozed_threads, vote_data = run_bot(reddit, comments_replied_to, unsubscribed_users, checkpoint, snoozed_threads, vote_data, nickname_mapper)
+            checkpoint, snoozed_threads, vote_data, tally_comments = run_bot(reddit, comments_replied_to, unsubscribed_users, checkpoint, snoozed_threads, vote_data, tally_comments, nickname_mapper)
             consecutive_errors = 0  # Reset error counter on success
             time.sleep(10)
             
