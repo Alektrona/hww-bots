@@ -1458,8 +1458,6 @@ def run_bot(reddit, comments_replied_to, unsubscribed_users, checkpoint, snoozed
             if "WEREBOT!UNSUBSCRIBE" in comment_body_upper or "WERE-BOT!UNSUBSCRIBE" in comment_body_upper:
                 logger.info(f"Processing unsubscribe from u/{comment.author}")
                 handle_unsubscribe(comment, unsubscribed_users, checkpoint)
-                    save_comment_id(comment.id)
-                    processed_count += 1
             
             # Handle subscribe
             elif "WEREBOT!SUBSCRIBE" in comment_body_upper or "WERE-BOT!SUBSCRIBE" in comment_body_upper:
